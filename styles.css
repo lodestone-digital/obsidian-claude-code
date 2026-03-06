@@ -1,0 +1,71 @@
+.claude-code-terminal-container {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+}
+
+.claude-code-toolbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--background-modifier-border);
+  background: var(--background-secondary);
+  min-height: 32px;
+  flex-shrink: 0;
+}
+
+.claude-code-title {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-normal);
+}
+
+.claude-code-title .svg-icon {
+  width: 14px;
+  height: 14px;
+}
+
+.claude-code-actions {
+  display: flex;
+  gap: 2px;
+}
+
+.claude-code-toolbar-btn {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 4px;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+}
+
+.claude-code-toolbar-btn:hover {
+  background: var(--background-modifier-hover);
+  color: var(--text-normal);
+}
+
+.claude-code-toolbar-btn .svg-icon {
+  width: 14px;
+  height: 14px;
+}
+
+.claude-code-term {
+  flex: 1;
+  overflow: hidden;
+  padding: 4px;
+}
+
+.claude-code-term .xterm {
+  height: 100%;
+}
+
+.claude-code-term .xterm-viewport {
+  overflow-y: auto !important;
+}

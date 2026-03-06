@@ -1,0 +1,17 @@
+# Build artifacts
+node_modules/
+/main.js
+
+# Obsidian
+data.json
+
+# OS
+.DS_Store
+
+# IDE
+.idea/
+.vscode/
+*.sublime-*
+
+# Claude Code
+.claude/
