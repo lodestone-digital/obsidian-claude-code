@@ -9,6 +9,8 @@ const fs = require("fs");
 
 const VIEW_TYPE = "claude-code-terminal";
 const XTERM_CSS_CONTENT = XTERM_CSS;
+const IS_WIN = process.platform === "win32";
+const IS_MAC = process.platform === "darwin";
 
 // Claude logomark — from official Claude AI SVG, group transform baked in
 const CLAUDE_LOGO_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="2 15 134 134" fill="currentColor"><path d="m 29.05,98.54 29.14,-16.35 0.49,-1.42 -0.49,-0.79 h -1.42 l -4.87,-0.3 -16.65,-0.45 -14.44,-0.6 -13.99,-0.75 -3.52,-0.75 -3.3,-4.35 0.34,-2.17 2.96,-1.99 4.24,0.37 9.37,0.64 14.06,0.97 10.2,0.6 15.11,1.57 h 2.4 l 0.34,-0.97 -0.82,-0.6 -0.64,-0.6 -14.55,-9.86 -15.75,-10.42 -8.25,-6 -4.46,-3.04 -2.25,-2.85 -0.97,-6.22 4.05,-4.46 5.44,0.37 1.39,0.37 5.51,4.24 11.77,9.11 15.37,11.32 2.25,1.87 0.9,-0.64 0.11,-0.45 -1.01,-1.69 -8.36,-15.11 -8.92,-15.37 -3.97,-6.37 -1.05,-3.82 c -0.37,-1.57 -0.64,-2.89 -0.64,-4.5 l 4.61,-6.26 2.55,-0.82 6.15,0.82 2.59,2.25 3.82,8.74 6.19,13.76 9.6,18.71 2.81,5.55 1.5,5.14 0.56,1.57 h 0.97 v -0.9 l 0.79,-10.54 1.46,-12.94 1.42,-16.65 0.49,-4.69 2.32,-5.62 4.61,-3.04 3.6,1.72 2.96,4.24 -0.41,2.74 -1.76,11.44 -3.45,17.92 -2.25,12 h 1.31 l 1.5,-1.5 6.07,-8.06 10.2,-12.75 4.5,-5.06 5.25,-5.59 3.37,-2.66 h 6.37 l 4.69,6.97 -2.1,7.2 -6.56,8.32 -5.44,7.05 -7.8,10.5 -4.87,8.4 0.45,0.67 1.16,-0.11 17.62,-3.75 9.52,-1.72 11.36,-1.95 5.14,2.4 0.56,2.44 -2.02,4.99 -12.15,3 -14.25,2.85 -21.22,5.02 -0.26,0.19 0.3,0.37 9.56,0.9 4.09,0.22 h 10.01 l 18.64,1.39 4.87,3.22 2.92,3.94 -0.49,3 -7.5,3.82 -10.12,-2.4 -23.62,-5.62 -8.1,-2.02 h -1.12 v 0.67 l 6.75,6.6 12.37,11.17 15.49,14.4 0.79,3.56 -1.99,2.81 -2.1,-0.3 -13.61,-10.24 -5.25,-4.61 -11.89,-10.01 h -0.79 v 1.05 l 2.74,4.01 14.47,21.75 0.75,6.67 -1.05,2.17 -3.75,1.31 -4.12,-0.75 -8.47,-11.89 -8.74,-13.39 -7.05,-12 -0.86,0.49 -4.16,44.81 -1.95,2.29 -4.5,1.72 -3.75,-2.85 -1.99,-4.61 1.99,-9.11 2.4,-11.89 1.95,-9.45 1.76,-11.74 1.05,-3.9 -0.07,-0.26 -0.86,0.11 -8.85,12.15 -13.46,18.19 -10.65,11.4 -2.55,1.01 -4.42,-2.29 0.41,-4.09 2.47,-3.64 14.74,-18.75 8.89,-11.62 5.74,-6.71 -0.04,-0.97 h -0.34 l -39.15,25.42 -6.97,0.9 -3,-2.81 0.37,-4.61 1.42,-1.5 11.77,-8.1 -0.04,0.04 z"/></svg>`;
@@ -38,7 +40,7 @@ def main():
     if pid == 0:
         # Exec through an interactive login shell so .zshrc is sourced.
         # This ensures nvm, node, npx, homebrew etc. are available for MCP servers.
-        shell = os.environ.get('SHELL', '/bin/zsh')
+        shell = os.environ.get('SHELL', '/bin/bash')
         shell_name = os.path.basename(shell)
         cmd_str = ' '.join(cmd)
         os.execvp(shell, [shell_name, '-l', '-i', '-c', cmd_str])
@@ -83,24 +85,28 @@ def main():
             i = 0
             while i < len(buf):
                 # Look for resize escape: ESC ] 9 ; rows ; cols BEL
-                if buf[i:i+4] == RESIZE_PREFIX:
-                    bel = buf.find(b'\x07', i + 4)
-                    if bel == -1:
-                        # Incomplete escape - keep in buffer for next read
-                        break
-                    payload = buf[i+4:bel]
-                    try:
-                        parts = payload.decode().split(';')
-                        if len(parts) == 2:
-                            r, c = int(parts[0]), int(parts[1])
-                            set_winsize(master_fd, r, c)
-                            os.kill(pid, signal.SIGWINCH)
-                    except (ValueError, OSError):
-                        pass
-                    i = bel + 1
-                else:
-                    out += buf[i:i+1]
-                    i += 1
+                idx = buf.find(RESIZE_PREFIX, i)
+                if idx == -1:
+                    out += buf[i:]
+                    i = len(buf)
+                    break
+                if idx > i:
+                    out += buf[i:idx]
+                bel = buf.find(b'\x07', idx + 4)
+                if bel == -1:
+                    # Incomplete escape - keep in buffer for next read
+                    i = idx
+                    break
+                payload = buf[idx+4:bel]
+                try:
+                    parts = payload.decode().split(';')
+                    if len(parts) == 2:
+                        r, c = int(parts[0]), int(parts[1])
+                        set_winsize(master_fd, r, c)
+                        os.kill(pid, signal.SIGWINCH)
+                except (ValueError, OSError):
+                    pass
+                i = bel + 1
 
             buf = buf[i:]
 
@@ -131,6 +137,10 @@ class ClaudeCodeView extends ItemView {
     this.fitAddon = null;
     this.process = null;
     this.styleEl = null;
+    this._resizeTimer = null;
+    this._outputBuffer = null;
+    this._outputTimer = null;
+    this._spawnGeneration = 0; // tracks which spawn is current, for close handler
   }
 
   getViewType() {
@@ -195,7 +205,7 @@ class ClaudeCodeView extends ItemView {
       cursorBlink: true,
       cursorStyle: "bar",
       fontSize: 13,
-      fontFamily: "'SF Mono', 'Fira Code', 'Cascadia Code', Menlo, monospace",
+      fontFamily: "'Cascadia Code', 'Fira Code', 'SF Mono', Menlo, Consolas, 'Courier New', monospace",
       lineHeight: 1.3,
       scrollback: 10000,
       allowProposedApi: true,
@@ -211,9 +221,12 @@ class ClaudeCodeView extends ItemView {
     setTimeout(() => this.fitAddon.fit(), 50);
 
     this.resizeObserver = new ResizeObserver(() => {
-      if (this.fitAddon) {
-        try { this.fitAddon.fit(); } catch (e) {}
-      }
+      if (this._resizeTimer) clearTimeout(this._resizeTimer);
+      this._resizeTimer = setTimeout(() => {
+        if (this.fitAddon) {
+          try { this.fitAddon.fit(); } catch (e) {}
+        }
+      }, 50);
     });
     this.resizeObserver.observe(termContainer);
 
@@ -281,6 +294,44 @@ class ClaudeCodeView extends ItemView {
     const cols = this.terminal ? this.terminal.cols : 80;
     const rows = this.terminal ? this.terminal.rows : 24;
 
+    if (IS_WIN) {
+      // On Windows, spawn claude directly without PTY bridge (no pty.fork)
+      this._spawnClaudeDirect(args, vaultPath, cols, rows);
+    } else {
+      this._spawnClaudeWithPty(args, vaultPath, cols, rows);
+    }
+  }
+
+  _spawnClaudeDirect(args, vaultPath, cols, rows) {
+    const claudePath = this.findClaude();
+    if (!claudePath) {
+      if (this.terminal) {
+        this.terminal.writeln("\x1b[31mError: 'claude' not found in PATH.\x1b[0m");
+        this.terminal.writeln("\x1b[33mMake sure Claude Code CLI is installed.\x1b[0m");
+      }
+      return;
+    }
+
+    const env = { ...process.env, TERM: "xterm-256color", COLORTERM: "truecolor", COLUMNS: String(cols), LINES: String(rows) };
+
+    const generation = ++this._spawnGeneration;
+    try {
+      this.process = spawn(claudePath, args, {
+        cwd: vaultPath,
+        env,
+        stdio: ["pipe", "pipe", "pipe"],
+        shell: true,
+      });
+      this._attachProcessHandlers(generation);
+      this.terminal.focus();
+    } catch (err) {
+      if (this.terminal) {
+        this.terminal.writeln(`\x1b[31mFailed to start: ${err.message}\x1b[0m`);
+      }
+    }
+  }
+
+  _spawnClaudeWithPty(args, vaultPath, cols, rows) {
     const claudePath = this.findClaude();
     if (!claudePath) {
       if (this.terminal) {
@@ -302,21 +353,31 @@ class ClaudeCodeView extends ItemView {
     // Write the PTY bridge script to a temp file
     const tmpDir = os.tmpdir();
     this.ptyScriptPath = path.join(tmpDir, "claude-code-pty-bridge.py");
-    fs.writeFileSync(this.ptyScriptPath, PYTHON_PTY_SCRIPT);
+    try {
+      fs.writeFileSync(this.ptyScriptPath, PYTHON_PTY_SCRIPT);
+    } catch (err) {
+      if (this.terminal) {
+        this.terminal.writeln(`\x1b[31mFailed to write PTY bridge script: ${err.message}\x1b[0m`);
+      }
+      return;
+    }
 
     // Ensure ~/.local/bin and common paths are in PATH
     const homedir = os.homedir();
     const extraPaths = [
       path.join(homedir, ".local", "bin"),
       path.join(homedir, ".npm-global", "bin"),
-      "/usr/local/bin",
-      "/opt/homebrew/bin",
     ];
+    if (IS_MAC) {
+      extraPaths.push("/usr/local/bin", "/opt/homebrew/bin");
+    }
     const currentPath = process.env.PATH || "";
+    const seen = new Set();
     const fullPath = [...extraPaths, ...currentPath.split(path.delimiter)]
-      .filter((v, i, a) => a.indexOf(v) === i) // dedupe
+      .filter((v) => { if (seen.has(v)) return false; seen.add(v); return true; })
       .join(path.delimiter);
 
+    const generation = ++this._spawnGeneration;
     try {
       this.process = spawn(pythonPath, ["-u", this.ptyScriptPath, claudePath, ...args], {
         cwd: vaultPath,
@@ -333,35 +394,7 @@ class ClaudeCodeView extends ItemView {
         stdio: ["pipe", "pipe", "pipe"],
       });
 
-      this.process.stdout.on("data", (data) => {
-        if (this.terminal) {
-          this.terminal.write(new Uint8Array(data));
-        }
-      });
-
-      this.process.stderr.on("data", (data) => {
-        if (this.terminal) {
-          this.terminal.write(new Uint8Array(data));
-        }
-      });
-
-      this.process.on("close", (code) => {
-        if (this.terminal) {
-          this.terminal.writeln("");
-          this.terminal.writeln(
-            `\x1b[90m[Claude Code exited with code ${code}. Press Restart to relaunch.]\x1b[0m`
-          );
-        }
-        this.process = null;
-      });
-
-      this.process.on("error", (err) => {
-        if (this.terminal) {
-          this.terminal.writeln(`\x1b[31mError: ${err.message}\x1b[0m`);
-        }
-        this.process = null;
-      });
-
+      this._attachProcessHandlers(generation);
       this.terminal.focus();
     } catch (err) {
       if (this.terminal) {
@@ -370,20 +403,94 @@ class ClaudeCodeView extends ItemView {
     }
   }
 
+  _flushOutput() {
+    if (this._outputBuffer && this.terminal) {
+      this.terminal.write(this._outputBuffer);
+      this._outputBuffer = null;
+    }
+    this._outputTimer = null;
+  }
+
+  _bufferOutput(data) {
+    if (!this._outputBuffer) {
+      this._outputBuffer = new Uint8Array(data);
+    } else {
+      // Concatenate buffers
+      const combined = new Uint8Array(this._outputBuffer.length + data.length);
+      combined.set(this._outputBuffer, 0);
+      combined.set(new Uint8Array(data), this._outputBuffer.length);
+      this._outputBuffer = combined;
+    }
+    if (!this._outputTimer) {
+      this._outputTimer = setTimeout(() => this._flushOutput(), 16); // ~1 frame at 60fps
+    }
+  }
+
+  _attachProcessHandlers(generation) {
+    this.process.stdout.on("data", (data) => {
+      if (this.terminal) {
+        this._bufferOutput(data);
+      }
+    });
+
+    this.process.stderr.on("data", (data) => {
+      if (this.terminal) {
+        this._bufferOutput(data);
+      }
+    });
+
+    this.process.on("close", (code) => {
+      // Only handle close if this is still the current generation
+      if (generation !== this._spawnGeneration) return;
+      if (this.terminal) {
+        this._flushOutput();
+        this.terminal.writeln("");
+        this.terminal.writeln(
+          `\x1b[90m[Claude Code exited with code ${code}. Press Restart to relaunch.]\x1b[0m`
+        );
+      }
+      this.process = null;
+    });
+
+    this.process.on("error", (err) => {
+      if (generation !== this._spawnGeneration) return;
+      if (this.terminal) {
+        this.terminal.writeln(`\x1b[31mError: ${err.message}\x1b[0m`);
+      }
+      this.process = null;
+    });
+  }
+
   findClaude() {
-    const candidates = [
-      path.join(os.homedir(), ".local", "bin", "claude"),
-      path.join(os.homedir(), ".npm-global", "bin", "claude"),
-      "/usr/local/bin/claude",
-      "/opt/homebrew/bin/claude",
-    ];
+    const homedir = os.homedir();
+    const names = IS_WIN ? ["claude.exe", "claude.cmd", "claude"] : ["claude"];
+    const candidates = [];
+
+    if (IS_WIN) {
+      // npm global installs on Windows
+      const appData = process.env.APPDATA || path.join(homedir, "AppData", "Roaming");
+      candidates.push(path.join(appData, "npm", "claude.cmd"));
+      candidates.push(path.join(appData, "npm", "claude"));
+    } else {
+      candidates.push(
+        path.join(homedir, ".local", "bin", "claude"),
+        path.join(homedir, ".npm-global", "bin", "claude"),
+      );
+      if (IS_MAC) {
+        candidates.push("/usr/local/bin/claude", "/opt/homebrew/bin/claude");
+      }
+      candidates.push("/usr/local/bin/claude");
+    }
+
     const pathDirs = (process.env.PATH || "").split(path.delimiter);
     for (const dir of pathDirs) {
-      candidates.push(path.join(dir, "claude"));
+      for (const name of names) {
+        candidates.push(path.join(dir, name));
+      }
     }
     for (const candidate of candidates) {
       try {
-        fs.accessSync(candidate, fs.constants.X_OK);
+        fs.accessSync(candidate, IS_WIN ? fs.constants.F_OK : fs.constants.X_OK);
         return candidate;
       } catch (e) {}
     }
@@ -391,13 +498,15 @@ class ClaudeCodeView extends ItemView {
   }
 
   findPython() {
-    const names = ["python3", "python"];
+    const names = IS_WIN
+      ? ["python3.exe", "python.exe", "python3", "python"]
+      : ["python3", "python"];
     const pathDirs = (process.env.PATH || "").split(path.delimiter);
     for (const name of names) {
       for (const dir of pathDirs) {
         const candidate = path.join(dir, name);
         try {
-          fs.accessSync(candidate, fs.constants.X_OK);
+          fs.accessSync(candidate, IS_WIN ? fs.constants.F_OK : fs.constants.X_OK);
           return candidate;
         } catch (e) {}
       }
@@ -407,12 +516,27 @@ class ClaudeCodeView extends ItemView {
 
   killProcess() {
     if (this.process) {
-      this.process.kill("SIGTERM");
       const proc = this.process;
-      setTimeout(() => {
-        try { if (!proc.killed) proc.kill("SIGKILL"); } catch (e) {}
-      }, 2000);
       this.process = null;
+      // Increment generation so the old close handler is ignored
+      this._spawnGeneration++;
+      try {
+        if (IS_WIN) {
+          // On Windows, SIGTERM doesn't work reliably; use taskkill for tree kill
+          spawn("taskkill", ["/pid", String(proc.pid), "/f", "/t"], { stdio: "ignore" });
+        } else {
+          proc.kill("SIGTERM");
+          setTimeout(() => {
+            try { if (!proc.killed) proc.kill("SIGKILL"); } catch (e) {}
+          }, 2000);
+        }
+      } catch (e) {}
+    }
+    // Flush any pending output buffer
+    if (this._outputTimer) {
+      clearTimeout(this._outputTimer);
+      this._outputTimer = null;
+      this._outputBuffer = null;
     }
   }
 
@@ -439,6 +563,7 @@ class ClaudeCodeView extends ItemView {
 
   async onClose() {
     this.killProcess();
+    if (this._resizeTimer) { clearTimeout(this._resizeTimer); this._resizeTimer = null; }
     if (this.resizeObserver) this.resizeObserver.disconnect();
     if (this.themeObserver) this.themeObserver.disconnect();
     if (this.terminal) { this.terminal.dispose(); this.terminal = null; }
